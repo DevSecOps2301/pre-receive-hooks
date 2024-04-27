@@ -1,0 +1,75 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+)
+
+func main() {
+	// Define list of regular expressions to be searched and blocked
+	regexList1 := []string{
+		// block any occurrence which has the word password
+		"password",
+	}
+
+	regexList2 := []string{
+		// Any private key file
+		`(\-){5}BEGIN\s?(RSA|OPENSSH|DSA|EC|PGP)?\s?PRIVATE KEY\s?(BLOCK)?(\-){5}.*`,
+		// AWS Keys
+		"AKIA[0-9A-Z]{16}",
+		// GCP keys
+		`\bprivate_key.*\b`,
+		// Google API Key
+		"AIza[0-9A-Za-z_-]{35}",
+		// Service-account
+		`"type": "service_account"`,
+		// Google OAuth Access Token
+		"ya29\\.[0-9A-Za-z\\-_]+",
+	}
+
+	found := 0
+	msgRegex := "##bypasscheck##"
+
+	// Get the commit range and read input from stdin
+	cmd := exec.Command("git", "rev-list", "--stdin", "--no-walk")
+	cmd.Stdin = os.Stdin
+	output, err := cmd.Output()
+	if err != nil {
+		fmt.Println("Error executing git command:", err)
+		os.Exit(1)
+	}
+
+	commits := strings.Split(string(output), "\n")
+	for _, commit := range commits {
+		if commit == "" {
+			continue
+		}
+
+		// Check if commit message contains the bypass check message
+		cmd := exec.Command("git", "log", "--max-count=1", "--format=%B", commit)
+		output, err := cmd.Output()
+		if err != nil {
+			fmt.Println("Error executing git command:", err)
+			os.Exit(1)
+		}
+
+		if !strings.Contains(strings.ToLower(string(output)), strings.ToLower(msgRegex)) {
+			// Perform checks on the commit
+			// Implement your logic here
+		}
+	}
+
+	// Check the count of found errors
+	if found > 0 {
+		fmt.Println("If you believe the flagged contents are false-positives, please mark it as #nonsecret.")
+		fmt.Println("To do so, you can copy the below text and place as commit description.")
+		// Print instructions for marking false positives
+		fmt.Println("If you are still unable to save the page, please include ##bypasscheck## as a start of commit message to bypass this Check")
+		os.Exit(1)
+	} else {
+		// No errors found
+		os.Exit(0)
+	}
+}
