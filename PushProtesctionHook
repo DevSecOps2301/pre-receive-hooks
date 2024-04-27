@@ -1,1 +1,140 @@
-test
+#!/bin/bash
+# Count of issues found in parsing
+found=0
+msg_regex='##bypasscheck##'
+# Define list of REGEX to be searched and blocked
+regex_list1=(
+    # block any occurence which as the word password
+    'password'
+)
+regex_list2=(
+    # Any private key file
+    '(\-){5}BEGIN\s?(RSA|OPENSSH|DSA|EC|PGP)?\s?PRIVATE KEY\s?(BLOCK)?(\-){5}.*'
+    # AWS Keys
+    'AKIA[0-9A-Z]{16}'
+    # GCP keys
+    '\bprivate_key.*\b'
+    # Google API Key
+    'AIza[0-9A-Za-z_-]{35}'
+    # Service-account
+    '"type": "service_account"'
+    # Google OAuth Access Token
+    'ya29\.[0-9A-Za-z\-_]+'
+)
+
+# Concatenate regex_list1
+separator="|"
+regex1="$( printf "${separator}%s" "${regex_list1[@]}" )"
+# remove leading separator
+regex1="${regex1:${#separator}}"
+
+# Concatenate regex_list2
+separator="|"
+regex2="$( printf "${separator}%s" "${regex_list2[@]}" )"
+# remove leading separator
+regex2="${regex2:${#separator}}"
+
+# Commit sha with all zeros
+zero_commit='0000000000000000000000000000000000000000'
+	
+# ------------------------------------------------------------------------------
+# Pre-receive hook
+# ------------------------------------------------------------------------------
+while read oldrev newrev refname; do
+    # Branch or tag got deleted, ignore the push
+    [ "$newrev" = "$zero_commit" ] && continue
+    # Calculate range for new branch/updated branch
+    [ "$oldrev" = "$zero_commit" ] && range="$newrev" || range="$oldrev..$newrev"
+    # Calculate sha for new branch/updated branch
+    [ "$oldrev" = "$zero_commit" ] && span=`git rev-list $(git for-each-ref --format='%(refname)' refs/heads/* | sed 's/^/\^/') ${newrev}` || span=`git rev-list ${oldrev}..${newrev}`
+	for commit in $(git rev-list "$range" --not --all); do
+        if ! git log --max-count=1 --format=%B $commit | grep -iqE "$msg_regex"; then
+            for sha1 in ${span}; do
+	    	    	match1=`git diff-tree -r -p --no-color --no-commit-id --diff-filter=d ${sha1}| grep  "^+"| grep -iE "b/|(${regex1})"|awk -F"+++" '{print $2}'|sed 's/b\//FILE:/g'`
+		        #echo ${match1}
+		        match2=`git diff-tree -r -p --no-color --no-commit-id --diff-filter=d ${sha1}| grep -E "b/|(${regex2})"|awk -F"+++" '{print $2}'|sed 's/b\//FILE:/g'`
+		        #echo ${match2}
+			#test1=`git diff-tree -r -p --no-color --no-commit-id --diff-filter=d ${sha1}| grep  "^+"| grep -iE "b/|(${regex1})"|awk -F"+++" '{print $2}'|sed 's/b\//FILE:/g'`
+			#echo $test1
+			#exit 1
+		        match1_regex1=`git diff-tree -r -p --no-color --no-commit-id --diff-filter=d ${sha1}| grep  "^+"|grep -iE "(${regex1})"`
+			match2_regex1=`echo ${match1_regex1}|sed 's/ +/" "/g;s/^+/"/;s/$/"/'`
+		        match1_regex2=`git diff-tree -r -p --no-color --no-commit-id --diff-filter=d ${sha1}|grep -E "(${regex2})"`
+		        match2_regex2=`echo $match2|sed 's/[[:blank:]]//g'|awk -F"FILE:" '{$1=""; print $0}'|sed 's/\""//g'|sed 's/"//g'|sed 's/[[:blank:]]/" "FILE:/g'|sed 's/^" //'|sed 's/$/"/'`
+			match3=`echo ${match1}| tr "FILE:"  "\n"|sed '/^$/d'|sed 's/^/FILE:/g'|grep -iE "(${regex1})"`
+			#TESTING
+			#echo $match1_regex1
+			#echo $match2_regex1
+			
+			if [ "${match1_regex1}" != "" ]; then
+		            eval "match3_regex1=($(echo $match2_regex1))"
+			    match4_regex1=`echo ${match2_regex1}`
+		            for i in "${match3_regex1[@]}"; do
+		   	       match3_regex1_count1=`git log --max-count=1 --format=%B $commit | grep "${i}"|wc -l`
+			       if [ ${match3_regex1_count1} -gt 0 ]; then
+		   		   match2_regex1=`echo ${match2_regex1}|sed "s/^ //;s/\"$i\"//g"`
+				   match4_regex1=`echo ${match2_regex1}|sed 's/[[:blank:]]*$//'`
+		   	       fi
+		            done    
+		        #echo match4_regex1=${match4_regex1}
+			eval "match5_regex1=($(echo $match4_regex1))"
+	            	fi
+		        if [ "${match4_regex1}" != "" ]; then
+			   echo ${match3}|sed 's/FILE:/\nFILE:/g'|sed '1d'|sed 's/ /\" contains the following instances with credential(s): [/1'|sed 's/^FILE:/The file "/g'|sed 's/$/]/g'
+	                   found=$((${found} + 1))
+	            	fi
+		    
+		        if [ "${match1_regex2}" != "" ]; then
+		            eval "match3_regex2=($(echo $match2_regex2))"
+			    match4_regex2=`echo ${match2_regex2}`
+		            for i in "${match3_regex2[@]}"; do
+		   	        match4_regex2_count=`echo $i|grep -iE "(${regex2})"|wc -l`
+		   	        if [ ${match4_regex2_count} -eq 0 ]; then
+		   		   match4_regex2=`echo ${match4_regex2}|sed "s/^ //;s/\"$i\"//g"`
+				   match4_regex2=`echo ${match4_regex2}|sed 's/[[:blank:]]*$//'`
+		   	        fi
+		            done
+	            	fi
+			match5_regex2=`echo ${match1}| tr " "  "\n"|grep "FILE:"`
+
+			for i in ${match5_regex2}; do
+			   match4_regex2_count1=`echo ${match4_regex2}|grep "${i}"|wc -l`
+			   if [ ${match4_regex2_count1} -eq 0 ]; then
+			   	match1=`echo ${match1}| tr " "  "\n"|grep "FILE:"|grep -v "${i}"`
+			   fi
+			done
+
+			for i in ${match1}; do
+               		   match1_count1=`git log --max-count=1 --format=%B $commit | grep "${i}"|wc -l`
+			   if [ ${match1_count1} -gt 0 ]; then
+			   	match1=`echo ${match1}|grep -v "${i}"`
+			   fi
+			done
+
+		        if [ "${match1}" != "" ]; then
+			   echo ${match1}|tr " " "\n"|sed 's/^FILE:/The file "/g'|sed 's/$/" has been identified as a key file or has a credential key(ServiceAccount or Private Key) stored in it./g'
+	                   found=$((${found} + 1))
+	            	fi
+            done
+        else
+            found=0
+        fi
+    done
+done
+
+# ------------------------------------------------------------------------------
+# Verify count of found errors
+# ------------------------------------------------------------------------------
+if [ ${found} -gt 0 ]; then
+  #echo "You're trying to commit a password, token, or confidential information."
+  # Found errors, exit with error
+  echo "If you believe the flagged contents are false-positives, please mark it as #nonsecret."
+  echo "To do so, you can copy the below text and place as commit description."
+  for i in ${match1};do echo "#nonsecret ${i}";done
+  for j in "${match5_regex1[@]}";do echo "#nonsecret ${j}";done
+  echo "If you are still unable to save the page, please include ##bypasscheck## as a start of commit message to bypass this Check"
+  exit 1
+else
+  # No errors found, exit with success
+  exit 0
+fi
